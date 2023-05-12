@@ -1,0 +1,214 @@
+---
+title: "Methodologies mean_GRM, SD_GRM and GRM_SVM"
+author: "Hélène Wilmot et al"
+date: "27 April 2023"
+output: word_document
+---
+
+The objective of this R script is to explain the development of the different methodologies developed. 
+These methodologies are based on the genomic relationship matrix (GRM).
+Mean_GRM refers to the assignment based on the highest mean relatedness of an animal to the breeds found in the reference set.
+SD_GRM refers to the assignment based on the highest standard deviation (SD) of the relatedness of an animal to the breeds found in the reference set.
+GRM_SVM refers to the assignment based on a linear support vector machine (SVM) using the different values of mean and SD of the relatedness of the animal to be assigned as an input.
+For the PLS_NSC methdology, please refer to the Supplemental material of Wilmot et al. (2022): https://doi.org/10.1111/jbg.12643
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Working directory should be set
+
+# Used packages
+
+```{r}
+#install.packages("dplyr",repos = "http://cran.us.r-project.org")
+library(dplyr)
+#install.packages("caret",repos = "http://cran.us.r-project.org")
+library(caret) #To cross-validate and validate GRM_SVM
+#install.packages("matrixStats",repos = "http://cran.us.r-project.org")
+library(matrixStats)
+```
+
+# 1. Mean_GRM
+
+## 1.1. Computation of mean relatedness of each validation animal to each breed of the reference set
+
+```{r}
+#GRM computed with calc_grm software
+GRM_valid<-read.table(file="G.grm", header=FALSE)
+head(GRM_valid)
+#V1 and V2 are number order assigned to animals , V3 is the relatedness, V4 and V5 are number IDs (here identical to V1 and V2)
+GRM_valid<-subset(GRM_valid, V1>325 & V2<326) #Keep relatedness of validation animals to reference animals only
+
+#Get the IDs of the reference animals
+ID_RS1<-read.table(file=paste("1_RS1_ID.txt", sep=""), header=FALSE, sep="") #V1 is the breed, V2 is the Interbull ID and V3 is the number ID  
+ID_EBRW_RS1<-subset(ID_RS1, V1=="EBRW") #IDs of EBRW reference animals
+ID_MRY_RS1<-subset(ID_RS1, V1=="MRY") #IDs of MRY reference animals
+ID_RPO_RS1<-subset(ID_RS1, V1=="RPO") #IDs of RPO reference animals
+
+GRM_valid_EBRW<-dplyr::filter(GRM_valid, V2 %in% ID_EBRW_RS1$V3) #Keep relatedness of validation animals to the EBRW reference set
+mean_to_EBRW<- GRM_valid_EBRW %>% group_by(V1) %>% 
+    dplyr::summarise(mean_relatedness_EBRW=mean(V3)) #Compute the mean relatedness of validation animals to the EBRW reference set
+head(mean_to_EBRW)
+
+GRM_valid_MRY<-dplyr::filter(GRM_valid, V2 %in% ID_MRY_RS1$V3) #Keep relatedness of validation animals to the MRY reference set
+mean_to_MRY<- GRM_valid_MRY %>% group_by(V1) %>% 
+    dplyr::summarise(mean_relatedness_MRY=mean(V3)) #Compute the mean relatedness of validation animals to the MRY reference set
+
+GRM_valid_RPO<- dplyr::filter(GRM_valid, V2 %in% ID_RPO_RS1$V3) #Keep relatedness of validation animals to the RPO reference set
+mean_to_RPO<- GRM_valid_RPO %>% group_by(V1) %>% 
+    dplyr::summarise(mean_relatedness_RPO=mean(V3)) #Compute the mean relatedness of validation animals to the RPO reference set
+``` 
+
+## 1.2. Assignment of validation animals to their breed based on mean_GRM
+
+```{r}
+#Merging mean relatedness of validation animals to each breed of interest
+mergedrel<-merge(mean_to_EBRW, mean_to_MRY, by=intersect("V1","V1"))
+mergedrel2<-merge(mergedrel, mean_to_RPO, by=intersect("V1","V1"))
+#Giving the real breed of origin of validation animals
+mergedrel2$Breed<-rep(c("EBRW","RPO","MRY"),c(113,66,146))
+mergedrel2 <- transform(mergedrel2, predicted=c("EBRW", "MRY", "RPO")[max.col(mergedrel2[-c(1,5)])]) #Predict the breed of origin of validation animals based on the highest mean relatedness
+#Determine if predicted breed is the same as the breed of origin
+mergedrel2$diff<-ifelse(mergedrel2$Breed == mergedrel2$predicted, 1,0)
+head(mergedrel2)
+percentage<-(sum(mergedrel2$diff)/nrow(mergedrel2)) #Percentage of correct assignment=global accuracy
+percentage
+``` 
+
+# 2. SD_GRM
+## 2.1. Computation of SD of the relatedness of each validation animal to each breed of the reference set
+
+```{r}
+#If performed alone, same steps as mean_GRM must be computed before computation of the SD of the relatedness of validation animals
+sd_to_EBRW<- GRM_valid_EBRW %>% group_by(V1) %>% 
+dplyr::summarise(sd_relatedness_EBRW=sd(V3)) #Compute the SD of the relatedness of validation animals to the EBRW reference set
+head(sd_to_EBRW)
+sd_to_MRY<- GRM_valid_MRY %>% group_by(V1) %>% 
+dplyr::summarise(sd_relatedness_MRY=sd(V3)) #Compute the SD of the relatedness of validation animals to the MRY reference set
+sd_to_RPO<- GRM_valid_RPO %>% group_by(V1) %>% 
+dplyr::summarise(sd_relatedness_RPO=sd(V3)) #Compute the SD of the relatedness of validation animals to the RPO reference set
+```
+  
+## 1.2. Assignment of validation animals to their breed based on SD_GRM
+```{r}
+#Merging SD of the relatedness of validation animals to each breed of interest
+mergedrelSD<-merge(sd_to_EBRW, sd_to_MRY, by=intersect("V1","V1"))
+mergedrelSD2<-merge(mergedrelSD, sd_to_RPO, by=intersect("V1","V1"))
+#Giving the real breed of origin of validation animals
+mergedrelSD2$Breed<-rep(c("EBRW","RPO","MRY"),c(113,66,146))
+mergedrelSD2 <- transform(mergedrelSD2, predicted=c("EBRW", "MRY", "RPO")[max.col(mergedrelSD2[-c(1,5)])])#Predict the breed of origin of validation animals based on the highest SD of the relatedness
+#Determine if predicted breed is the same as the breed of origin
+mergedrelSD2$diff<-ifelse(mergedrelSD2$Breed == mergedrelSD2$predicted, 1,0)
+head(mergedrelSD2)
+percentageSD<-(sum(mergedrelSD2$diff)/nrow(mergedrelSD2))#Percentage of correct assignment=global accuracy
+percentageSD
+```
+
+# 3. GRM_SVM
+## 3.1. Formating
+Transform the table obtained in calc_grm as a matrix, easier to handle for the GRM_SVM methodology
+
+```{r}
+IN <- data.table::fread("G.grm") #Read the GRM table
+# Column in V1
+# Row in V2
+n.entries <- max(IN$V5) #To determine the dimension of the GRM matrix
+m <- matrix(9, nrow = n.entries, ncol = n.entries) #Set an empty matrix with the correct dimensions
+#A loop to fill the matrix with the values of the GRM table
+counter <- 1
+for(col.i in 1:ncol(m)){
+for(row.j in 1:col.i){
+m[row.j, col.i] <- IN$V3[counter]
+m[col.i, row.j] <- IN$V3[counter]
+counter <- counter + 1
+}
+}
+m<-m[1:325,1:325] #Keep reference animals
+colnames(m)<-c(1:325) #Assign the ID of animals as column names
+diag(m)<-NA #Replace self-relatedness (on the diagonal) by NA to avoid a bias in the computation of mean relatedness
+m[1:5,1:5]
+```  
+
+## 3.2. Computation of mean and SD of the relatedness within the reference set (self-relatedness excluded)
+
+```{r}
+EBRW_list<-ID_EBRW_RS1$V3 #List of EBRW reference animals
+MRY_list<-ID_MRY_RS1$V3 #List of MRY reference animals
+RPO_list<-ID_RPO_RS1$V3 #List of RPO reference animals
+#Mean relatedness to EBRW animals within RS1
+forComSVMEBRW<-as.data.frame(rowMeans(subset(m,select=EBRW_list),na.rm=TRUE)) 
+forComSVMEBRW$ID<-rownames(forComSVMEBRW)#Set IDs in the file
+head(forComSVMEBRW)
+
+#Mean relatedness to MRY animals within RS1
+forComSVMMRY<-as.data.frame(rowMeans(subset(m,select=MRY_list),na.rm=TRUE)) 
+forComSVMMRY$ID<-rownames(forComSVMMRY) #Set IDs in the file
+
+#Mean relatedness to RPO animals within RS1
+forComSVMRPO<-as.data.frame(rowMeans(subset(m,select=RPO_list),na.rm=TRUE))
+forComSVMRPO$ID<-rownames(forComSVMRPO)#Set IDs in the file
+
+#SD of the relatedness to EBRW animals within RS1
+forComSVMEBRWsd<-as.data.frame(rowSds(subset(m,select=EBRW_list),na.rm=TRUE))
+forComSVMEBRWsd$ID<-rownames(forComSVMEBRWsd)#Set IDs in the file
+head(forComSVMEBRWsd)
+
+#SD of the relatedness to MRY animals within RS1
+forComSVMMRYsd<-as.data.frame(rowSds(subset(m,select=MRY_list),na.rm=TRUE))
+forComSVMMRYsd$ID<-rownames(forComSVMMRYsd)#Set IDs in the file
+
+#SD of the relatedness to RPO animals within RS1
+forComSVMRPOsd<-as.data.frame(rowSds(subset(m,select=RPO_list),na.rm=TRUE))
+forComSVMRPOsd$ID<-rownames(forComSVMRPOsd)#Set IDs in the file
+
+#Merge the six variables (mean and SD of the relatedness within RS1)
+combi1 <- merge(forComSVMEBRW, forComSVMMRY, by=intersect("ID","ID"))
+combi2<-merge(forComSVMRPO,combi1, by=intersect("ID","ID"))
+combi3<-merge(forComSVMEBRWsd,combi2, by=intersect("ID","ID"))
+combi4<-merge(forComSVMMRYsd,combi3, by=intersect("ID","ID"))
+combi5<-merge(forComSVMRPOsd,combi4, by=intersect("ID","ID"))
+#Define column names
+colnames(combi5)<-c("ID","sd_RPO", "sd_MRY","sd_EBRW","relatedness_RPO","relatedness_EBRW","relatedness_MRY") 
+combi5$ID<-as.numeric(combi5$ID) #Define ID as numeric
+combi5<-combi5[order(combi5$ID),] #Order by ID
+combi5$Breed<-ID_RS1$V1 #Define breed of origin
+combi_final<-combi5[,c(1,6,7,5,4,3,2,8)] #Order columns (important to have the same order for validation)
+combi_final$Breed<-as.factor(combi_final$Breed) #Define breed as a factor
+levels(combi_final$Breed) #Check the factor levels of the breed
+head(combi_final)
+```
+ 
+## 3.3. Training of the linear SVM on the values of the reference set
+
+```{r}
+set.seed(1001) # To fix the algorithm
+ctrl<-trainControl(method="repeatedcv", number=10, classProbs=TRUE, selectionFunction= "best") # Parameter optimized based on the best value obtained in 10 fold cross-validation
+
+grid<-expand.grid(C=c(0.001,0.01,0.1,0.2,0.3,0.4,0.5, 0.6, 0.7, 0.8, 0.9)) #Cost values to be tested
+row.names(combi_final)<-combi_final$ID #Set ID in rownames
+combi_final_svm<-combi_final[,-1] #Remove the variable ID
+svmL = train(Breed~.,data=combi_final_svm,
+               method="svmLinear", 
+               trControl = ctrl,
+               preProc=c("center","scale"), #Mean centring and SD scaling for each of the six variables
+               metric="Accuracy",
+               tuneGrid=grid)
+svmL
+```  
+  
+## 3.4. Validation of the linear SVM on the validation set
+
+```{r}
+#Merge files with the mean and SD of the relatedness of the validation set
+#These were previously computed on sections 1.1. and 2.1.
+combination<-merge(mergedrel2, mergedrelSD2, by=intersect("V1","V1"))
+combination<-combination[,c(1:4,8:11)] #Same order of columns as for the input file used for training
+colnames(combination)<-c("ID","relatedness_EBRW","relatedness_MRY","relatedness_RPO","sd_EBRW","sd_MRY","sd_RPO","Breed") #Define column names as previously
+combination$Breed<-as.factor(combination$Breed) #Define breed as a factor
+combination_svm<-combination[,-1] #Remove the variable ID
+levels(combination_svm$Breed) #Check the factor levels of the breed
+head(combination_svm)
+pred<-predict(svmL, combination_svm) #Predict the breed based on the model tuned by cross-validation (section 3.3.)
+confus<-confusionMatrix(pred, combination_svm[,7])
+confus #Confusion matrix with global accuracy, sensitivities and specificities for each breed
+```  
